@@ -3,7 +3,7 @@
 TermLink is a beginner-friendly terminal chat application written in Rust. It is
 being built in small, tested phases so each networking concept is easy to follow.
 
-## Phase 2 status
+## Phase 3 status
 
 The project currently contains two programs:
 
@@ -13,9 +13,9 @@ The project currently contains two programs:
   prints replies from the server.
 
 TCP provides a reliable stream of bytes. TermLink treats each newline as the
-boundary between messages. A Tokio broadcast channel gives every connection its
-own receiver, while one shared sender copies public messages to all receivers.
-Later phases will replace plain text with newline-delimited JSON.
+boundary between JSON messages. Serde converts typed Rust enums to JSON and back,
+so malformed or unexpected input can be reported instead of crashing the server.
+A Tokio broadcast channel gives every connection its own receiver.
 
 ```text
 Client A --TCP--\
@@ -64,5 +64,17 @@ src/bin/client.rs   Terminal client entry point
 tests/              Integration tests
 ```
 
-The next phase will introduce usernames, timestamps, structured JSON, and chat
-commands.
+The next phase will replace the temporary username handshake with registration,
+login, password hashing, and MySQL-backed history.
+
+## Current chat commands
+
+- `/help` lists available commands.
+- `/users` lists connected usernames.
+- `/dm <username> <message>` is parsed now and will be enabled in Phase 5.
+- `/history [number]` is parsed now and will use MySQL in Phase 4.
+- `/quit` closes the client connection.
+
+Usernames contain 3–24 ASCII letters, numbers, underscores, or hyphens. Chat
+messages contain 1–1,000 Unicode characters. The server checks these rules even
+when a custom client bypasses the official terminal client.
