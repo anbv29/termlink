@@ -51,6 +51,12 @@ pub enum ServerMessage {
     History {
         messages: Vec<HistoryMessage>,
     },
+    DirectMessage {
+        from: String,
+        to: String,
+        content: String,
+        timestamp: DateTime<Utc>,
+    },
     Error {
         message: String,
     },

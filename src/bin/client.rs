@@ -101,6 +101,12 @@ async fn main() -> std::io::Result<()> {
                                 }
                             }
                         }
+                        Ok(ServerMessage::DirectMessage { from, to, content, timestamp }) => {
+                            println!(
+                                "[{}] DM {from} -> {to}: {content}",
+                                timestamp.format("%H:%M:%S")
+                            );
+                        }
                         Ok(ServerMessage::Error { message }) => eprintln!("Error: {message}"),
                         Err(_) => eprintln!("Received a malformed message from the server"),
                     },

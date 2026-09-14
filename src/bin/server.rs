@@ -6,7 +6,14 @@ use termlink::database::{Database, User};
 use termlink::protocol::{self, ClientMessage, ServerMessage};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{RwLock, broadcast, mpsc};
+
+#[derive(Clone)]
+struct OnlineUser {
+    id: u64,
+    display_name: String,
+    direct_sender: mpsc::UnboundedSender<ServerMessage>,
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "termlink-server", about = "Run the TermLink chat server")]
@@ -26,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     database.migrate().await?;
     let listener = TcpListener::bind(&args.bind).await?;
     let (messages, _) = broadcast::channel::<ServerMessage>(100);
-    let users = Arc::new(RwLock::new(HashMap::<String, String>::new()));
+    let users = Arc::new(RwLock::new(HashMap::<String, OnlineUser>::new()));
     println!("{} server listening on {}", termlink::APP_NAME, args.bind);
 
     loop {
@@ -48,12 +55,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn handle_client(
     stream: TcpStream,
     messages: broadcast::Sender<ServerMessage>,
-    users: Arc<RwLock<HashMap<String, String>>>,
+    users: Arc<RwLock<HashMap<String, OnlineUser>>>,
     database: Database,
 ) -> std::io::Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
     let mut inbox = messages.subscribe();
+    let (direct_sender, mut direct_inbox) = mpsc::unbounded_channel::<ServerMessage>();
     let mut current_user: Option<User> = None;
 
     loop {
@@ -87,7 +95,11 @@ async fn handle_client(
                                     Ok(user) => {
                                         users.write().await.insert(
                                             requested_name.to_ascii_lowercase(),
-                                            requested_name.clone(),
+                                            OnlineUser {
+                                                id: user.id,
+                                                display_name: requested_name.clone(),
+                                                direct_sender: direct_sender.clone(),
+                                            },
                                         );
                                         current_user = Some(user);
                                         write_message(
@@ -147,7 +159,11 @@ async fn handle_client(
                                             let display_name = user.username.clone();
                                             users.write().await.insert(
                                                 display_name.to_ascii_lowercase(),
-                                                display_name.clone(),
+                                                OnlineUser {
+                                                    id: user.id,
+                                                    display_name: display_name.clone(),
+                                                    direct_sender: direct_sender.clone(),
+                                                },
                                             );
                                             current_user = Some(user);
                                             write_message(
@@ -212,15 +228,66 @@ async fn handle_client(
                             }).await?;
                         }
                         Ok(ClientMessage::ListUsers) => {
-                            let mut names = users.read().await.values().cloned().collect::<Vec<_>>();
+                            let mut names = users
+                                .read()
+                                .await
+                                .values()
+                                .map(|user| user.display_name.clone())
+                                .collect::<Vec<_>>();
                             names.sort_by_key(|name| name.to_ascii_lowercase());
                             write_message(&mut writer, &ServerMessage::UserList { users: names }).await?;
                         }
                         Ok(ClientMessage::DirectMessage { to, content }) => {
-                            let validation = protocol::validate_username(&to)
-                                .and_then(|_| protocol::validate_message(&content));
-                            let message = validation.err().unwrap_or_else(|| "Private messages are not available yet".to_owned());
-                            write_message(&mut writer, &ServerMessage::Error { message }).await?;
+                            if current_user.is_none() {
+                                write_message(&mut writer, &ServerMessage::Error {
+                                    message: "Log in before sending private messages".to_owned(),
+                                }).await?;
+                            } else if let Err(message) = protocol::validate_username(&to)
+                                .and_then(|_| protocol::validate_message(&content))
+                            {
+                                write_message(&mut writer, &ServerMessage::Error { message }).await?;
+                            } else {
+                                let target = users
+                                    .read()
+                                    .await
+                                    .get(&to.to_ascii_lowercase())
+                                    .cloned();
+                                if let Some(target) = target {
+                                    let sender = current_user.as_ref().expect("checked above");
+                                    match database
+                                        .save_direct_message(sender.id, target.id, &content)
+                                        .await
+                                    {
+                                        Ok(timestamp) => {
+                                            let direct_message = ServerMessage::DirectMessage {
+                                                from: sender.username.clone(),
+                                                to: target.display_name.clone(),
+                                                content,
+                                                timestamp,
+                                            };
+                                            if target.id != sender.id
+                                                && target.direct_sender.send(direct_message.clone()).is_err()
+                                            {
+                                                write_message(&mut writer, &ServerMessage::Error {
+                                                    message: "That user is no longer available".to_owned(),
+                                                }).await?;
+                                            } else {
+                                                write_message(&mut writer, &direct_message).await?;
+                                            }
+                                        }
+                                        Err(error) => {
+                                            eprintln!("Database private-message error: {error}");
+                                            write_message(&mut writer, &ServerMessage::Error {
+                                                message: "The private message could not be saved".to_owned(),
+                                            }).await?;
+                                        }
+                                    }
+                                } else {
+                                    write_message(&mut writer, &ServerMessage::Error {
+                                        message: "That user is not online".to_owned(),
+                                    }).await?;
+                                }
+                            }
                         }
                         Ok(ClientMessage::History { limit }) => {
                             match (current_user.as_ref(), protocol::validate_history_limit(limit)) {
@@ -264,6 +331,11 @@ async fn handle_client(
                         eprintln!("Slow client skipped {skipped} messages");
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            direct = direct_inbox.recv() => {
+                if let Some(message) = direct {
+                    write_message(&mut writer, &message).await?;
                 }
             }
         }

@@ -128,4 +128,24 @@ impl Database {
         messages.reverse();
         Ok(messages)
     }
+
+    pub async fn save_direct_message(
+        &self,
+        sender_id: u64,
+        recipient_id: u64,
+        content: &str,
+    ) -> Result<DateTime<Utc>, sqlx::Error> {
+        let timestamp = Utc::now();
+        sqlx::query(
+            "INSERT INTO messages (sender_id, recipient_id, room, content, created_at) \
+             VALUES (?, ?, NULL, ?, ?)",
+        )
+        .bind(sender_id)
+        .bind(recipient_id)
+        .bind(content)
+        .bind(timestamp.naive_utc())
+        .execute(&self.pool)
+        .await?;
+        Ok(timestamp)
+    }
 }
