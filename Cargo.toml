@@ -6,4 +6,4 @@ description = "A beginner-friendly terminal chat application"
 license = "MIT"
 
 [dependencies]
-tokio = { version = "1.47", features = ["io-util", "macros", "net", "rt-multi-thread"] }
+tokio = { version = "1.47", features = ["io-std", "io-util", "macros", "net", "rt-multi-thread"] }
