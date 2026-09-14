@@ -10,6 +10,10 @@ pub const GENERAL_ROOM: &str = "general";
 pub enum ClientMessage {
     Join { username: String },
     Chat { content: String },
+    Help,
+    ListUsers,
+    DirectMessage { to: String, content: String },
+    History { limit: Option<u32> },
     Quit,
 }
 

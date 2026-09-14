@@ -66,6 +66,26 @@ async fn handle_client(
                                 }).await?;
                             }
                         }
+                        Ok(ClientMessage::Help) => {
+                            write_message(&mut writer, &ServerMessage::Notice {
+                                message: "Commands: /help, /users, /dm <username> <message>, /history [number], /quit".to_owned(),
+                            }).await?;
+                        }
+                        Ok(ClientMessage::ListUsers) => {
+                            write_message(&mut writer, &ServerMessage::Notice {
+                                message: "The user list will be available after session tracking is added".to_owned(),
+                            }).await?;
+                        }
+                        Ok(ClientMessage::DirectMessage { .. }) => {
+                            write_message(&mut writer, &ServerMessage::Error {
+                                message: "Private messages are not available yet".to_owned(),
+                            }).await?;
+                        }
+                        Ok(ClientMessage::History { .. }) => {
+                            write_message(&mut writer, &ServerMessage::Error {
+                                message: "Persistent history is not available yet".to_owned(),
+                            }).await?;
+                        }
                         Ok(ClientMessage::Quit) => break,
                         Err(_) => {
                             write_message(&mut writer, &ServerMessage::Error {

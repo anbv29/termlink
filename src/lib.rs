@@ -1,5 +1,6 @@
 //! Shared code for the TermLink server and client.
 
+pub mod commands;
 pub mod protocol;
 
 /// The human-readable application name.

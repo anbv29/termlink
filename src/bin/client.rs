@@ -1,4 +1,5 @@
 use std::io::Write as _;
+use termlink::commands::{self, Command, ParsedInput};
 use termlink::protocol::{self, ClientMessage, ServerMessage};
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -31,10 +32,21 @@ async fn main() -> std::io::Result<()> {
             input = input_lines.next_line() => {
                 match input? {
                     Some(line) => {
-                        let message = if line.trim() == "/quit" {
-                            ClientMessage::Quit
-                        } else {
-                            ClientMessage::Chat { content: line }
+                        let message = match commands::parse_input(&line) {
+                            Ok(ParsedInput::Chat(content)) => ClientMessage::Chat { content },
+                            Ok(ParsedInput::Command(command)) => match command {
+                                Command::Help => ClientMessage::Help,
+                                Command::Users => ClientMessage::ListUsers,
+                                Command::DirectMessage { username, message } => {
+                                    ClientMessage::DirectMessage { to: username, content: message }
+                                }
+                                Command::History { limit } => ClientMessage::History { limit },
+                                Command::Quit => ClientMessage::Quit,
+                            },
+                            Err(error) => {
+                                eprintln!("{error}");
+                                continue;
+                            }
                         };
                         let json = protocol::encode(&message).map_err(std::io::Error::other)?;
                         writer.write_all(json.as_bytes()).await?;
