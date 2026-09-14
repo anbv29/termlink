@@ -16,9 +16,13 @@ async fn main() -> std::io::Result<()> {
         println!("Client connected from {peer}");
 
         tokio::spawn(async move {
-            if let Err(error) = handle_client(stream, messages).await {
+            let _ = messages.send(format!("* {peer} joined the chat"));
+
+            if let Err(error) = handle_client(stream, messages.clone()).await {
                 eprintln!("Connection error for {peer}: {error}");
             }
+
+            let _ = messages.send(format!("* {peer} left the chat"));
             println!("Client disconnected: {peer}");
         });
     }
