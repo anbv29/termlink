@@ -30,11 +30,31 @@ async fn handle_client(
 ) -> std::io::Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
-    let _inbox = messages.subscribe();
+    let mut inbox = messages.subscribe();
 
-    while let Some(line) = lines.next_line().await? {
-        writer.write_all(line.as_bytes()).await?;
-        writer.write_all(b"\n").await?;
+    loop {
+        tokio::select! {
+            incoming = lines.next_line() => {
+                match incoming? {
+                    Some(line) => {
+                        let _ = messages.send(line);
+                    }
+                    None => break,
+                }
+            }
+            broadcast = inbox.recv() => {
+                match broadcast {
+                    Ok(message) => {
+                        writer.write_all(message.as_bytes()).await?;
+                        writer.write_all(b"\n").await?;
+                    }
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        eprintln!("Slow client skipped {skipped} messages");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        }
     }
 
     Ok(())
