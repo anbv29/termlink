@@ -2,6 +2,7 @@ use chrono::Utc;
 use clap::Parser;
 use std::collections::HashMap;
 use std::sync::Arc;
+use termlink::auth;
 use termlink::database::Database;
 use termlink::protocol::{self, ClientMessage, ServerMessage};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -33,10 +34,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (stream, peer) = listener.accept().await?;
         let messages = messages.clone();
         let users = users.clone();
+        let database = database.clone();
         println!("Client connected from {peer}");
 
         tokio::spawn(async move {
-            if let Err(error) = handle_client(stream, messages.clone(), users).await {
+            if let Err(error) = handle_client(stream, messages.clone(), users, database).await {
                 eprintln!("Connection error for {peer}: {error}");
             }
             println!("Client disconnected: {peer}");
@@ -48,6 +50,7 @@ async fn handle_client(
     stream: TcpStream,
     messages: broadcast::Sender<ServerMessage>,
     users: Arc<RwLock<HashMap<String, String>>>,
+    database: Database,
 ) -> std::io::Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
@@ -64,28 +67,54 @@ async fn handle_client(
                         }).await?;
                     }
                     Some(line) => match protocol::decode::<ClientMessage>(&line) {
-                        Ok(ClientMessage::Join { username: requested_name }) => {
+                        Ok(ClientMessage::Register { username: requested_name, password }) => {
                             if username.is_some() {
                                 write_message(&mut writer, &ServerMessage::Error {
                                     message: "A username is already set for this connection".to_owned(),
                                 }).await?;
                             } else if let Err(message) = protocol::validate_username(&requested_name) {
                                 write_message(&mut writer, &ServerMessage::Error { message }).await?;
+                            } else if let Err(message) = auth::validate_password(&password) {
+                                write_message(&mut writer, &ServerMessage::Error { message }).await?;
                             } else {
-                                let key = requested_name.to_ascii_lowercase();
-                                let mut online = users.write().await;
-                                if online.contains_key(&key) {
-                                    drop(online);
-                                    write_message(&mut writer, &ServerMessage::Error {
-                                        message: "That username is already online".to_owned(),
-                                    }).await?;
-                                } else {
-                                    online.insert(key, requested_name.clone());
-                                    drop(online);
-                                    username = Some(requested_name.clone());
-                                    let _ = messages.send(ServerMessage::Notice {
-                                        message: format!("{requested_name} joined #general"),
-                                    });
+                                let password_hash = tokio::task::spawn_blocking(move || {
+                                    auth::hash_password(&password)
+                                })
+                                .await
+                                .map_err(std::io::Error::other)?
+                                .map_err(|error| std::io::Error::other(error.to_string()))?;
+
+                                match database.create_user(&requested_name, &password_hash).await {
+                                    Ok(_) => {
+                                        users.write().await.insert(
+                                            requested_name.to_ascii_lowercase(),
+                                            requested_name.clone(),
+                                        );
+                                        username = Some(requested_name.clone());
+                                        write_message(
+                                            &mut writer,
+                                            &ServerMessage::Authenticated {
+                                                username: requested_name.clone(),
+                                            },
+                                        )
+                                        .await?;
+                                        let _ = messages.send(ServerMessage::Notice {
+                                            message: format!("{requested_name} joined #general"),
+                                        });
+                                    }
+                                    Err(error) if Database::is_duplicate(&error) => {
+                                        write_message(&mut writer, &ServerMessage::Error {
+                                            message: "That username is already registered".to_owned(),
+                                        })
+                                        .await?;
+                                    }
+                                    Err(error) => {
+                                        eprintln!("Database registration error: {error}");
+                                        write_message(&mut writer, &ServerMessage::Error {
+                                            message: "The database could not create the account".to_owned(),
+                                        })
+                                        .await?;
+                                    }
                                 }
                             }
                         }

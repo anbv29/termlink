@@ -15,7 +15,7 @@ struct Args {
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let args = Args::parse();
-    let username = read_username()?;
+    let (username, password) = read_registration()?;
 
     let stream = TcpStream::connect(&args.address).await?;
     println!("Connected to {} at {}", termlink::APP_NAME, args.address);
@@ -25,8 +25,8 @@ async fn main() -> std::io::Result<()> {
     let mut server_lines = BufReader::new(reader).lines();
     let mut input_lines = BufReader::new(io::stdin()).lines();
 
-    let join =
-        protocol::encode(&ClientMessage::Join { username }).map_err(std::io::Error::other)?;
+    let join = protocol::encode(&ClientMessage::Register { username, password })
+        .map_err(std::io::Error::other)?;
     writer.write_all(join.as_bytes()).await?;
     writer.write_all(b"\n").await?;
 
@@ -68,6 +68,9 @@ async fn main() -> std::io::Result<()> {
             message = server_lines.next_line() => {
                 match message? {
                     Some(line) => match protocol::decode::<ServerMessage>(&line) {
+                        Ok(ServerMessage::Authenticated { username }) => {
+                            println!("Authenticated as {username}");
+                        }
                         Ok(ServerMessage::Chat { room, username, content, timestamp }) => {
                             println!("[{}] #{room} {username}: {content}", timestamp.format("%H:%M:%S"));
                         }
@@ -90,7 +93,7 @@ async fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-fn read_username() -> std::io::Result<String> {
+fn read_registration() -> std::io::Result<(String, String)> {
     loop {
         print!("Username: ");
         std::io::stdout().flush()?;
@@ -98,7 +101,17 @@ fn read_username() -> std::io::Result<String> {
         std::io::stdin().read_line(&mut username)?;
         let username = username.trim().to_owned();
         match protocol::validate_username(&username) {
-            Ok(()) => return Ok(username),
+            Ok(()) => {
+                print!("Password: ");
+                std::io::stdout().flush()?;
+                let mut password = String::new();
+                std::io::stdin().read_line(&mut password)?;
+                let password = password.trim_end().to_owned();
+                match termlink::auth::validate_password(&password) {
+                    Ok(()) => return Ok((username, password)),
+                    Err(error) => eprintln!("{error}"),
+                }
+            }
             Err(error) => eprintln!("{error}"),
         }
     }

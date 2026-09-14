@@ -13,7 +13,7 @@ pub const MAX_WIRE_LINE_LENGTH: usize = 8_192;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
-    Join { username: String },
+    Register { username: String, password: String },
     Chat { content: String },
     Help,
     ListUsers,
@@ -25,6 +25,9 @@ pub enum ClientMessage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
+    Authenticated {
+        username: String,
+    },
     Chat {
         room: String,
         username: String,
