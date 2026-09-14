@@ -1,3 +1,4 @@
+use termlink::protocol::{self, ClientMessage, ServerMessage};
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
@@ -18,8 +19,18 @@ async fn main() -> std::io::Result<()> {
             input = input_lines.next_line() => {
                 match input? {
                     Some(line) => {
-                        writer.write_all(line.as_bytes()).await?;
+                        let message = if line.trim() == "/quit" {
+                            ClientMessage::Quit
+                        } else {
+                            ClientMessage::Chat { content: line }
+                        };
+                        let json = protocol::encode(&message).map_err(std::io::Error::other)?;
+                        writer.write_all(json.as_bytes()).await?;
                         writer.write_all(b"\n").await?;
+
+                        if matches!(message, ClientMessage::Quit) {
+                            break;
+                        }
                     }
                     None => {
                         writer.shutdown().await?;
@@ -29,7 +40,12 @@ async fn main() -> std::io::Result<()> {
             }
             message = server_lines.next_line() => {
                 match message? {
-                    Some(line) => println!("Server: {line}"),
+                    Some(line) => match protocol::decode::<ServerMessage>(&line) {
+                        Ok(ServerMessage::Chat { content }) => println!("{content}"),
+                        Ok(ServerMessage::Notice { message }) => println!("* {message}"),
+                        Ok(ServerMessage::Error { message }) => eprintln!("Error: {message}"),
+                        Err(_) => eprintln!("Received a malformed message from the server"),
+                    },
                     None => {
                         println!("Server closed the connection.");
                         break;
