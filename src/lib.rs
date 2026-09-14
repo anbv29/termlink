@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod commands;
 pub mod database;
+pub mod error;
 pub mod protocol;
 
 /// The human-readable application name.

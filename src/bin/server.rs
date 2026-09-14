@@ -3,11 +3,14 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use termlink::auth;
 use termlink::database::{Database, User};
+use termlink::error::Result;
 use termlink::protocol::{self, ClientMessage, ServerMessage};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{RwLock, broadcast, mpsc};
 use tokio::task::JoinSet;
+use tracing::{error, info, warn};
+use tracing_subscriber::EnvFilter;
 
 #[derive(Clone)]
 struct OnlineUser {
@@ -27,7 +30,13 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("termlink=info")),
+        )
+        .with_target(false)
+        .init();
     dotenvy::dotenv().ok();
     let args = Args::parse();
     let database = Database::connect(&args.database_url).await?;
@@ -37,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (shutdown, _) = broadcast::channel::<()>(1);
     let users = Arc::new(RwLock::new(HashMap::<String, OnlineUser>::new()));
     let mut tasks = JoinSet::new();
-    println!("{} server listening on {}", termlink::APP_NAME, args.bind);
+    info!(address = %args.bind, "TermLink server listening");
 
     loop {
         tokio::select! {
@@ -48,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let database = database.clone();
                 let shutdown = shutdown.subscribe();
                 let session_name = Arc::new(Mutex::new(None::<String>));
-                println!("Client connected from {peer}");
+                info!(%peer, "client connected");
 
                 tasks.spawn(async move {
                     if let Err(error) = handle_client(
@@ -59,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         shutdown,
                         session_name.clone(),
                     ).await {
-                        eprintln!("Connection error for {peer}: {error}");
+                        warn!(%peer, %error, "client connection ended with an error");
                     }
 
                     let disconnected_name = session_name
@@ -72,12 +81,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             message: format!("{username} left #general"),
                         });
                     }
-                    println!("Client disconnected: {peer}");
+                    info!(%peer, "client disconnected");
                 });
             }
             signal = tokio::signal::ctrl_c() => {
                 signal?;
-                println!("Shutdown requested; closing client connections...");
+                info!("shutdown requested; closing client connections");
                 break;
             }
         }
@@ -86,11 +95,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = shutdown.send(());
     while let Some(result) = tasks.join_next().await {
         if let Err(error) = result {
-            eprintln!("Client task ended unexpectedly: {error}");
+            error!(%error, "client task ended unexpectedly");
         }
     }
     database.close().await;
-    println!("TermLink server stopped cleanly");
+    info!("TermLink server stopped cleanly");
     Ok(())
 }
 
@@ -173,7 +182,7 @@ async fn handle_client(
                                         .await?;
                                     }
                                     Err(error) => {
-                                        eprintln!("Database registration error: {error}");
+                                        error!(%error, "database registration failed");
                                         write_message(&mut writer, &ServerMessage::Error {
                                             message: "The database could not create the account".to_owned(),
                                         })
@@ -244,7 +253,7 @@ async fn handle_client(
                                         }).await?;
                                     }
                                     Err(error) => {
-                                        eprintln!("Database login error: {error}");
+                                        error!(%error, "database login failed");
                                         write_message(&mut writer, &ServerMessage::Error {
                                             message: "The database could not complete login".to_owned(),
                                         }).await?;
@@ -266,7 +275,7 @@ async fn handle_client(
                                         });
                                     }
                                     Err(error) => {
-                                        eprintln!("Database message error: {error}");
+                                        error!(%error, "saving public message failed");
                                         write_message(&mut writer, &ServerMessage::Error {
                                             message: "The message could not be saved".to_owned(),
                                         }).await?;
@@ -332,7 +341,7 @@ async fn handle_client(
                                             }
                                         }
                                         Err(error) => {
-                                            eprintln!("Database private-message error: {error}");
+                                            error!(%error, "saving private message failed");
                                             write_message(&mut writer, &ServerMessage::Error {
                                                 message: "The private message could not be saved".to_owned(),
                                             }).await?;
@@ -362,7 +371,7 @@ async fn handle_client(
                                         }).await?;
                                     }
                                     Err(error) => {
-                                        eprintln!("Database history error: {error}");
+                                        error!(%error, "loading public history failed");
                                         write_message(&mut writer, &ServerMessage::Error {
                                             message: "History is temporarily unavailable".to_owned(),
                                         }).await?;
@@ -384,7 +393,7 @@ async fn handle_client(
                 match broadcast {
                     Ok(message) => write_message(&mut writer, &message).await?,
                     Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                        eprintln!("Slow client skipped {skipped} messages");
+                        warn!(skipped, "slow client missed broadcast messages");
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
