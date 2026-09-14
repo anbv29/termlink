@@ -3,22 +3,24 @@
 TermLink is a beginner-friendly terminal chat application written in Rust. It is
 being built in small, tested phases so each networking concept is easy to follow.
 
-## Phase 1 status
+## Phase 2 status
 
-The first phase contains two programs:
+The project currently contains two programs:
 
-- `server` listens on `127.0.0.1:8080`, accepts one TCP connection, and echoes
-  each line it receives.
+- `server` listens on `127.0.0.1:8080`, creates one lightweight Tokio task per
+  connection, and broadcasts each received line to every connected client.
 - `client` connects to that address, sends lines typed in the terminal, and
   prints replies from the server.
 
-TCP provides a reliable stream of bytes. TermLink currently treats each newline
-as the boundary between messages. Later phases will replace plain text with
-newline-delimited JSON and allow many users to chat at once.
+TCP provides a reliable stream of bytes. TermLink treats each newline as the
+boundary between messages. A Tokio broadcast channel gives every connection its
+own receiver, while one shared sender copies public messages to all receivers.
+Later phases will replace plain text with newline-delimited JSON.
 
 ```text
-Terminal input -> client -> TCP connection -> server
-                       <- echoed response <-
+Client A --TCP--\
+                 server -> Tokio broadcast channel -> Client A
+Client B --TCP--/                                  -> Client B
 ```
 
 ## Prerequisites
@@ -26,7 +28,7 @@ Terminal input -> client -> TCP connection -> server
 - Rust and Cargo
 - Windows PowerShell or another terminal
 
-## Run Phase 1
+## Run TermLink
 
 Open two terminals in the project directory. Start the server first:
 
@@ -62,4 +64,5 @@ src/bin/client.rs   Terminal client entry point
 tests/              Integration tests
 ```
 
-The next phase will introduce concurrent connections and public broadcasts.
+The next phase will introduce usernames, timestamps, structured JSON, and chat
+commands.
