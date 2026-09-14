@@ -19,4 +19,8 @@ impl Database {
     pub fn pool(&self) -> &MySqlPool {
         &self.pool
     }
+
+    pub async fn migrate(&self) -> Result<(), sqlx::migrate::MigrateError> {
+        sqlx::migrate!("./migrations").run(&self.pool).await
+    }
 }

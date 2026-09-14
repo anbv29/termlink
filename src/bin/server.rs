@@ -22,7 +22,8 @@ struct Args {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
     let args = Args::parse();
-    let _database = Database::connect(&args.database_url).await?;
+    let database = Database::connect(&args.database_url).await?;
+    database.migrate().await?;
     let listener = TcpListener::bind(&args.bind).await?;
     let (messages, _) = broadcast::channel::<ServerMessage>(100);
     let users = Arc::new(RwLock::new(HashMap::<String, String>::new()));
