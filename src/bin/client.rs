@@ -1,3 +1,4 @@
+use std::io::Write as _;
 use termlink::protocol::{self, ClientMessage, ServerMessage};
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -6,6 +7,12 @@ const ADDRESS: &str = "127.0.0.1:8080";
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    print!("Username: ");
+    std::io::stdout().flush()?;
+    let mut username = String::new();
+    std::io::stdin().read_line(&mut username)?;
+    let username = username.trim().to_owned();
+
     let stream = TcpStream::connect(ADDRESS).await?;
     println!("Connected to {} at {ADDRESS}", termlink::APP_NAME);
     println!("Type a message and press Enter. Press Ctrl+Z, then Enter, to exit.");
@@ -13,6 +20,11 @@ async fn main() -> std::io::Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut server_lines = BufReader::new(reader).lines();
     let mut input_lines = BufReader::new(io::stdin()).lines();
+
+    let join =
+        protocol::encode(&ClientMessage::Join { username }).map_err(std::io::Error::other)?;
+    writer.write_all(join.as_bytes()).await?;
+    writer.write_all(b"\n").await?;
 
     loop {
         tokio::select! {
@@ -41,7 +53,9 @@ async fn main() -> std::io::Result<()> {
             message = server_lines.next_line() => {
                 match message? {
                     Some(line) => match protocol::decode::<ServerMessage>(&line) {
-                        Ok(ServerMessage::Chat { content }) => println!("{content}"),
+                        Ok(ServerMessage::Chat { room, username, content, timestamp }) => {
+                            println!("[{}] #{room} {username}: {content}", timestamp.format("%H:%M:%S"));
+                        }
                         Ok(ServerMessage::Notice { message }) => println!("* {message}"),
                         Ok(ServerMessage::Error { message }) => eprintln!("Error: {message}"),
                         Err(_) => eprintln!("Received a malformed message from the server"),

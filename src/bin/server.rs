@@ -1,3 +1,4 @@
+use chrono::Utc;
 use termlink::protocol::{self, ClientMessage, ServerMessage};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -17,17 +18,9 @@ async fn main() -> std::io::Result<()> {
         println!("Client connected from {peer}");
 
         tokio::spawn(async move {
-            let _ = messages.send(ServerMessage::Notice {
-                message: format!("{peer} joined the chat"),
-            });
-
             if let Err(error) = handle_client(stream, messages.clone()).await {
                 eprintln!("Connection error for {peer}: {error}");
             }
-
-            let _ = messages.send(ServerMessage::Notice {
-                message: format!("{peer} left the chat"),
-            });
             println!("Client disconnected: {peer}");
         });
     }
@@ -40,14 +33,38 @@ async fn handle_client(
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
     let mut inbox = messages.subscribe();
+    let mut username: Option<String> = None;
 
     loop {
         tokio::select! {
             incoming = lines.next_line() => {
                 match incoming? {
                     Some(line) => match protocol::decode::<ClientMessage>(&line) {
+                        Ok(ClientMessage::Join { username: requested_name }) => {
+                            if username.is_some() {
+                                write_message(&mut writer, &ServerMessage::Error {
+                                    message: "A username is already set for this connection".to_owned(),
+                                }).await?;
+                            } else {
+                                username = Some(requested_name.clone());
+                                let _ = messages.send(ServerMessage::Notice {
+                                    message: format!("{requested_name} joined #general"),
+                                });
+                            }
+                        }
                         Ok(ClientMessage::Chat { content }) => {
-                            let _ = messages.send(ServerMessage::Chat { content });
+                            if let Some(username) = &username {
+                                let _ = messages.send(ServerMessage::Chat {
+                                    room: protocol::GENERAL_ROOM.to_owned(),
+                                    username: username.clone(),
+                                    content,
+                                    timestamp: Utc::now(),
+                                });
+                            } else {
+                                write_message(&mut writer, &ServerMessage::Error {
+                                    message: "Choose a username before chatting".to_owned(),
+                                }).await?;
+                            }
                         }
                         Ok(ClientMessage::Quit) => break,
                         Err(_) => {
@@ -69,6 +86,12 @@ async fn handle_client(
                 }
             }
         }
+    }
+
+    if let Some(username) = username {
+        let _ = messages.send(ServerMessage::Notice {
+            message: format!("{username} left #general"),
+        });
     }
 
     Ok(())
