@@ -8,11 +8,7 @@ const ADDRESS: &str = "127.0.0.1:8080";
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    print!("Username: ");
-    std::io::stdout().flush()?;
-    let mut username = String::new();
-    std::io::stdin().read_line(&mut username)?;
-    let username = username.trim().to_owned();
+    let username = read_username()?;
 
     let stream = TcpStream::connect(ADDRESS).await?;
     println!("Connected to {} at {ADDRESS}", termlink::APP_NAME);
@@ -69,6 +65,9 @@ async fn main() -> std::io::Result<()> {
                             println!("[{}] #{room} {username}: {content}", timestamp.format("%H:%M:%S"));
                         }
                         Ok(ServerMessage::Notice { message }) => println!("* {message}"),
+                        Ok(ServerMessage::UserList { users }) => {
+                            println!("Online users ({}): {}", users.len(), users.join(", "));
+                        }
                         Ok(ServerMessage::Error { message }) => eprintln!("Error: {message}"),
                         Err(_) => eprintln!("Received a malformed message from the server"),
                     },
@@ -82,4 +81,18 @@ async fn main() -> std::io::Result<()> {
     }
 
     Ok(())
+}
+
+fn read_username() -> std::io::Result<String> {
+    loop {
+        print!("Username: ");
+        std::io::stdout().flush()?;
+        let mut username = String::new();
+        std::io::stdin().read_line(&mut username)?;
+        let username = username.trim().to_owned();
+        match protocol::validate_username(&username) {
+            Ok(()) => return Ok(username),
+            Err(error) => eprintln!("{error}"),
+        }
+    }
 }
