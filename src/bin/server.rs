@@ -3,7 +3,7 @@ use clap::Parser;
 use std::collections::HashMap;
 use std::sync::Arc;
 use termlink::auth;
-use termlink::database::Database;
+use termlink::database::{Database, User};
 use termlink::protocol::{self, ClientMessage, ServerMessage};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -55,7 +55,7 @@ async fn handle_client(
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
     let mut inbox = messages.subscribe();
-    let mut username: Option<String> = None;
+    let mut current_user: Option<User> = None;
 
     loop {
         tokio::select! {
@@ -68,7 +68,7 @@ async fn handle_client(
                     }
                     Some(line) => match protocol::decode::<ClientMessage>(&line) {
                         Ok(ClientMessage::Register { username: requested_name, password }) => {
-                            if username.is_some() {
+                            if current_user.is_some() {
                                 write_message(&mut writer, &ServerMessage::Error {
                                     message: "A username is already set for this connection".to_owned(),
                                 }).await?;
@@ -85,12 +85,12 @@ async fn handle_client(
                                 .map_err(|error| std::io::Error::other(error.to_string()))?;
 
                                 match database.create_user(&requested_name, &password_hash).await {
-                                    Ok(_) => {
+                                    Ok(user) => {
                                         users.write().await.insert(
                                             requested_name.to_ascii_lowercase(),
                                             requested_name.clone(),
                                         );
-                                        username = Some(requested_name.clone());
+                                        current_user = Some(user);
                                         write_message(
                                             &mut writer,
                                             &ServerMessage::Authenticated {
@@ -118,13 +118,76 @@ async fn handle_client(
                                 }
                             }
                         }
+                        Ok(ClientMessage::Login { username: requested_name, password }) => {
+                            if current_user.is_some() {
+                                write_message(&mut writer, &ServerMessage::Error {
+                                    message: "This connection is already authenticated".to_owned(),
+                                }).await?;
+                            } else if protocol::validate_username(&requested_name).is_err()
+                                || auth::validate_password(&password).is_err()
+                            {
+                                write_message(&mut writer, &ServerMessage::Error {
+                                    message: "Invalid username or password".to_owned(),
+                                }).await?;
+                            } else if users.read().await.contains_key(&requested_name.to_ascii_lowercase()) {
+                                write_message(&mut writer, &ServerMessage::Error {
+                                    message: "That user is already online".to_owned(),
+                                }).await?;
+                            } else {
+                                match database.user_credentials(&requested_name).await {
+                                    Ok(Some(credentials)) => {
+                                        let encoded_hash = credentials.password_hash;
+                                        let password_matches = tokio::task::spawn_blocking(move || {
+                                            auth::verify_password(&password, &encoded_hash)
+                                        })
+                                        .await
+                                        .map_err(std::io::Error::other)?;
+
+                                        if password_matches {
+                                            let user = credentials.user;
+                                            let display_name = user.username.clone();
+                                            users.write().await.insert(
+                                                display_name.to_ascii_lowercase(),
+                                                display_name.clone(),
+                                            );
+                                            current_user = Some(user);
+                                            write_message(
+                                                &mut writer,
+                                                &ServerMessage::Authenticated {
+                                                    username: display_name.clone(),
+                                                },
+                                            )
+                                            .await?;
+                                            let _ = messages.send(ServerMessage::Notice {
+                                                message: format!("{display_name} joined #general"),
+                                            });
+                                        } else {
+                                            write_message(&mut writer, &ServerMessage::Error {
+                                                message: "Invalid username or password".to_owned(),
+                                            }).await?;
+                                        }
+                                    }
+                                    Ok(None) => {
+                                        write_message(&mut writer, &ServerMessage::Error {
+                                            message: "Invalid username or password".to_owned(),
+                                        }).await?;
+                                    }
+                                    Err(error) => {
+                                        eprintln!("Database login error: {error}");
+                                        write_message(&mut writer, &ServerMessage::Error {
+                                            message: "The database could not complete login".to_owned(),
+                                        }).await?;
+                                    }
+                                }
+                            }
+                        }
                         Ok(ClientMessage::Chat { content }) => {
                             if let Err(message) = protocol::validate_message(&content) {
                                 write_message(&mut writer, &ServerMessage::Error { message }).await?;
-                            } else if let Some(username) = &username {
+                            } else if let Some(user) = &current_user {
                                 let _ = messages.send(ServerMessage::Chat {
                                     room: protocol::GENERAL_ROOM.to_owned(),
-                                    username: username.clone(),
+                                    username: user.username.clone(),
                                     content,
                                     timestamp: Utc::now(),
                                 });
@@ -178,10 +241,13 @@ async fn handle_client(
         }
     }
 
-    if let Some(username) = username {
-        users.write().await.remove(&username.to_ascii_lowercase());
+    if let Some(user) = current_user {
+        users
+            .write()
+            .await
+            .remove(&user.username.to_ascii_lowercase());
         let _ = messages.send(ServerMessage::Notice {
-            message: format!("{username} left #general"),
+            message: format!("{} left #general", user.username),
         });
     }
 

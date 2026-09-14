@@ -1,6 +1,6 @@
 //! Password validation and Argon2id hashing helpers.
 
-use argon2::password_hash::{PasswordHasher, SaltString};
+use argon2::password_hash::{PasswordHasher, PasswordVerifier, SaltString};
 use argon2::{Argon2, PasswordHash};
 use rand_core::OsRng;
 
@@ -23,6 +23,15 @@ pub fn hash_password(password: &str) -> Result<String, argon2::password_hash::Er
     Ok(hash.to_string())
 }
 
+pub fn verify_password(password: &str, encoded_hash: &str) -> bool {
+    let Ok(hash) = PasswordHash::new(encoded_hash) else {
+        return false;
+    };
+    Argon2::default()
+        .verify_password(password.as_bytes(), &hash)
+        .is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -32,5 +41,12 @@ mod tests {
         let hash = hash_password("correct horse battery staple").unwrap();
         assert!(hash.starts_with("$argon2"));
         assert!(!hash.contains("correct horse battery staple"));
+    }
+
+    #[test]
+    fn verifies_only_the_correct_password() {
+        let hash = hash_password("correct horse battery staple").unwrap();
+        assert!(verify_password("correct horse battery staple", &hash));
+        assert!(!verify_password("wrong password", &hash));
     }
 }

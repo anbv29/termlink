@@ -1,11 +1,17 @@
 //! MySQL connection pool used by the chat server.
 
+use sqlx::Row;
 use sqlx::mysql::{MySqlPool, MySqlPoolOptions};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct User {
     pub id: u64,
     pub username: String,
+}
+
+pub struct UserCredentials {
+    pub user: User,
+    pub password_hash: String,
 }
 
 #[derive(Clone)]
@@ -49,5 +55,27 @@ impl Database {
 
     pub fn is_duplicate(error: &sqlx::Error) -> bool {
         matches!(error, sqlx::Error::Database(database) if database.code().as_deref() == Some("1062"))
+    }
+
+    pub async fn user_credentials(
+        &self,
+        username: &str,
+    ) -> Result<Option<UserCredentials>, sqlx::Error> {
+        let row =
+            sqlx::query("SELECT id, username, password_hash FROM users WHERE username = ? LIMIT 1")
+                .bind(username)
+                .fetch_optional(&self.pool)
+                .await?;
+
+        row.map(|row| {
+            Ok(UserCredentials {
+                user: User {
+                    id: row.try_get("id")?,
+                    username: row.try_get("username")?,
+                },
+                password_hash: row.try_get("password_hash")?,
+            })
+        })
+        .transpose()
     }
 }

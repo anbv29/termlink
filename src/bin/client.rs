@@ -12,10 +12,15 @@ struct Args {
     address: String,
 }
 
+enum AuthChoice {
+    Register,
+    Login,
+}
+
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let args = Args::parse();
-    let (username, password) = read_registration()?;
+    let (choice, username, password) = read_credentials()?;
 
     let stream = TcpStream::connect(&args.address).await?;
     println!("Connected to {} at {}", termlink::APP_NAME, args.address);
@@ -25,8 +30,11 @@ async fn main() -> std::io::Result<()> {
     let mut server_lines = BufReader::new(reader).lines();
     let mut input_lines = BufReader::new(io::stdin()).lines();
 
-    let join = protocol::encode(&ClientMessage::Register { username, password })
-        .map_err(std::io::Error::other)?;
+    let authentication = match choice {
+        AuthChoice::Register => ClientMessage::Register { username, password },
+        AuthChoice::Login => ClientMessage::Login { username, password },
+    };
+    let join = protocol::encode(&authentication).map_err(std::io::Error::other)?;
     writer.write_all(join.as_bytes()).await?;
     writer.write_all(b"\n").await?;
 
@@ -93,7 +101,19 @@ async fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-fn read_registration() -> std::io::Result<(String, String)> {
+fn read_credentials() -> std::io::Result<(AuthChoice, String, String)> {
+    let choice = loop {
+        print!("Register or login? [r/l]: ");
+        std::io::stdout().flush()?;
+        let mut choice = String::new();
+        std::io::stdin().read_line(&mut choice)?;
+        match choice.trim().to_ascii_lowercase().as_str() {
+            "r" | "register" => break AuthChoice::Register,
+            "l" | "login" => break AuthChoice::Login,
+            _ => eprintln!("Enter r to register or l to log in"),
+        }
+    };
+
     loop {
         print!("Username: ");
         std::io::stdout().flush()?;
@@ -108,7 +128,7 @@ fn read_registration() -> std::io::Result<(String, String)> {
                 std::io::stdin().read_line(&mut password)?;
                 let password = password.trim_end().to_owned();
                 match termlink::auth::validate_password(&password) {
-                    Ok(()) => return Ok((username, password)),
+                    Ok(()) => return Ok((choice, username, password)),
                     Err(error) => eprintln!("{error}"),
                 }
             }
