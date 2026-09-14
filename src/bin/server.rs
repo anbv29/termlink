@@ -1,4 +1,3 @@
-use chrono::Utc;
 use clap::Parser;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -185,12 +184,22 @@ async fn handle_client(
                             if let Err(message) = protocol::validate_message(&content) {
                                 write_message(&mut writer, &ServerMessage::Error { message }).await?;
                             } else if let Some(user) = &current_user {
-                                let _ = messages.send(ServerMessage::Chat {
-                                    room: protocol::GENERAL_ROOM.to_owned(),
-                                    username: user.username.clone(),
-                                    content,
-                                    timestamp: Utc::now(),
-                                });
+                                match database.save_public_message(user.id, &content).await {
+                                    Ok(timestamp) => {
+                                        let _ = messages.send(ServerMessage::Chat {
+                                            room: protocol::GENERAL_ROOM.to_owned(),
+                                            username: user.username.clone(),
+                                            content,
+                                            timestamp,
+                                        });
+                                    }
+                                    Err(error) => {
+                                        eprintln!("Database message error: {error}");
+                                        write_message(&mut writer, &ServerMessage::Error {
+                                            message: "The message could not be saved".to_owned(),
+                                        }).await?;
+                                    }
+                                }
                             } else {
                                 write_message(&mut writer, &ServerMessage::Error {
                                     message: "Choose a username before chatting".to_owned(),
@@ -214,10 +223,29 @@ async fn handle_client(
                             write_message(&mut writer, &ServerMessage::Error { message }).await?;
                         }
                         Ok(ClientMessage::History { limit }) => {
-                            let message = protocol::validate_history_limit(limit)
-                                .err()
-                                .unwrap_or_else(|| "Persistent history is not available yet".to_owned());
-                            write_message(&mut writer, &ServerMessage::Error { message }).await?;
+                            match (current_user.as_ref(), protocol::validate_history_limit(limit)) {
+                                (None, _) => {
+                                    write_message(&mut writer, &ServerMessage::Error {
+                                        message: "Log in before requesting history".to_owned(),
+                                    }).await?;
+                                }
+                                (_, Err(message)) => {
+                                    write_message(&mut writer, &ServerMessage::Error { message }).await?;
+                                }
+                                (Some(_), Ok(limit)) => match database.public_history(limit).await {
+                                    Ok(history) => {
+                                        write_message(&mut writer, &ServerMessage::History {
+                                            messages: history,
+                                        }).await?;
+                                    }
+                                    Err(error) => {
+                                        eprintln!("Database history error: {error}");
+                                        write_message(&mut writer, &ServerMessage::Error {
+                                            message: "History is temporarily unavailable".to_owned(),
+                                        }).await?;
+                                    }
+                                }
+                            }
                         }
                         Ok(ClientMessage::Quit) => break,
                         Err(error) => {

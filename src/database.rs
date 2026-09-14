@@ -1,5 +1,7 @@
 //! MySQL connection pool used by the chat server.
 
+use crate::protocol::{GENERAL_ROOM, HistoryMessage};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use sqlx::Row;
 use sqlx::mysql::{MySqlPool, MySqlPoolOptions};
 
@@ -77,5 +79,53 @@ impl Database {
             })
         })
         .transpose()
+    }
+
+    pub async fn save_public_message(
+        &self,
+        sender_id: u64,
+        content: &str,
+    ) -> Result<DateTime<Utc>, sqlx::Error> {
+        let timestamp = Utc::now();
+        sqlx::query(
+            "INSERT INTO messages (sender_id, recipient_id, room, content, created_at) \
+             VALUES (?, NULL, ?, ?, ?)",
+        )
+        .bind(sender_id)
+        .bind(GENERAL_ROOM)
+        .bind(content)
+        .bind(timestamp.naive_utc())
+        .execute(&self.pool)
+        .await?;
+        Ok(timestamp)
+    }
+
+    pub async fn public_history(&self, limit: u32) -> Result<Vec<HistoryMessage>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT users.username, messages.content, messages.created_at \
+             FROM messages \
+             INNER JOIN users ON users.id = messages.sender_id \
+             WHERE messages.room = ? AND messages.recipient_id IS NULL \
+             ORDER BY messages.created_at DESC, messages.id DESC \
+             LIMIT ?",
+        )
+        .bind(GENERAL_ROOM)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut messages = rows
+            .into_iter()
+            .map(|row| {
+                let timestamp: NaiveDateTime = row.try_get("created_at")?;
+                Ok(HistoryMessage {
+                    username: row.try_get("username")?,
+                    content: row.try_get("content")?,
+                    timestamp: timestamp.and_utc(),
+                })
+            })
+            .collect::<Result<Vec<_>, sqlx::Error>>()?;
+        messages.reverse();
+        Ok(messages)
     }
 }

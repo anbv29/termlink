@@ -86,6 +86,21 @@ async fn main() -> std::io::Result<()> {
                         Ok(ServerMessage::UserList { users }) => {
                             println!("Online users ({}): {}", users.len(), users.join(", "));
                         }
+                        Ok(ServerMessage::History { messages }) => {
+                            if messages.is_empty() {
+                                println!("No public messages have been saved yet.");
+                            } else {
+                                println!("Recent #general messages:");
+                                for message in messages {
+                                    println!(
+                                        "[{}] {}: {}",
+                                        message.timestamp.format("%Y-%m-%d %H:%M:%S UTC"),
+                                        message.username,
+                                        message.content
+                                    );
+                                }
+                            }
+                        }
                         Ok(ServerMessage::Error { message }) => eprintln!("Error: {message}"),
                         Err(_) => eprintln!("Received a malformed message from the server"),
                     },

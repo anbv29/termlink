@@ -3,7 +3,7 @@
 TermLink is a beginner-friendly terminal chat application written in Rust. It is
 being built in small, tested phases so each networking concept is easy to follow.
 
-## Phase 3 status
+## Phase 4 status
 
 The project currently contains two programs:
 
@@ -64,15 +64,24 @@ src/bin/client.rs   Terminal client entry point
 tests/              Integration tests
 ```
 
-The next phase will replace the temporary username handshake with registration,
-login, password hashing, and MySQL-backed history.
+The next phase will add private messaging, graceful shutdown, richer logging,
+and final hardening.
+
+Phase 4 now stores accounts and public messages in MySQL. Passwords are converted
+to salted Argon2id hashes before insertion; the plain password is never written to
+the database. `/history` requests at most 100 recent messages and displays them in
+chronological order.
+
+Copy `.env.example` to `.env`, create the database and application user described
+by its `DATABASE_URL`, then start the server. The server applies migrations before
+accepting connections. Full setup commands are added in the final documentation.
 
 ## Current chat commands
 
 - `/help` lists available commands.
 - `/users` lists connected usernames.
 - `/dm <username> <message>` is parsed now and will be enabled in Phase 5.
-- `/history [number]` is parsed now and will use MySQL in Phase 4.
+- `/history [number]` retrieves recent public messages from MySQL.
 - `/quit` closes the client connection.
 
 Usernames contain 3–24 ASCII letters, numbers, underscores, or hyphens. Chat
