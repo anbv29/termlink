@@ -318,7 +318,9 @@ async fn handle_client(
                                     .get(&to.to_ascii_lowercase())
                                     .cloned();
                                 if let Some(target) = target {
-                                    let sender = current_user.as_ref().expect("checked above");
+                                    let Some(sender) = current_user.as_ref() else {
+                                        continue;
+                                    };
                                     match database
                                         .save_direct_message(sender.id, target.id, &content)
                                         .await

@@ -28,3 +28,11 @@ fn rejects_incomplete_and_unknown_commands() {
     assert!(parse_input("/dm alice").is_err());
     assert!(parse_input("/dance").is_err());
 }
+
+#[test]
+fn plain_text_remains_a_public_chat_message() {
+    assert_eq!(
+        parse_input("  hello general room  ").unwrap(),
+        ParsedInput::Chat("hello general room".to_owned())
+    );
+}

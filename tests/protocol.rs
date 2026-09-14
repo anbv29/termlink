@@ -27,3 +27,20 @@ fn timestamped_server_message_round_trips_through_json() {
 
     assert_eq!(decoded, original);
 }
+
+#[test]
+fn rejects_malformed_json() {
+    assert!(protocol::decode::<ClientMessage>("{not-json}").is_err());
+}
+
+#[test]
+fn direct_message_response_round_trips() {
+    let original = ServerMessage::DirectMessage {
+        from: "alice".to_owned(),
+        to: "bob".to_owned(),
+        content: "private hello".to_owned(),
+        timestamp: Utc.with_ymd_and_hms(2026, 9, 14, 12, 31, 0).unwrap(),
+    };
+    let json = protocol::encode(&original).unwrap();
+    assert_eq!(protocol::decode::<ServerMessage>(&json).unwrap(), original);
+}
