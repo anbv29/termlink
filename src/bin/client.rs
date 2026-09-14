@@ -1,17 +1,24 @@
+use clap::Parser;
 use std::io::Write as _;
 use termlink::commands::{self, Command, ParsedInput};
 use termlink::protocol::{self, ClientMessage, ServerMessage};
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
-const ADDRESS: &str = "127.0.0.1:8080";
+#[derive(Debug, Parser)]
+#[command(name = "termlink-client", about = "Connect to a TermLink server")]
+struct Args {
+    #[arg(long, default_value = "127.0.0.1:8080")]
+    address: String,
+}
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    let args = Args::parse();
     let username = read_username()?;
 
-    let stream = TcpStream::connect(ADDRESS).await?;
-    println!("Connected to {} at {ADDRESS}", termlink::APP_NAME);
+    let stream = TcpStream::connect(&args.address).await?;
+    println!("Connected to {} at {}", termlink::APP_NAME, args.address);
     println!("Type a message and press Enter. Press Ctrl+Z, then Enter, to exit.");
 
     let (reader, mut writer) = stream.into_split();

@@ -1,19 +1,32 @@
 use chrono::Utc;
+use clap::Parser;
 use std::collections::HashMap;
 use std::sync::Arc;
+use termlink::database::Database;
 use termlink::protocol::{self, ClientMessage, ServerMessage};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{RwLock, broadcast};
 
-const ADDRESS: &str = "127.0.0.1:8080";
+#[derive(Debug, Parser)]
+#[command(name = "termlink-server", about = "Run the TermLink chat server")]
+struct Args {
+    #[arg(long, env = "TERMLINK_BIND", default_value = "127.0.0.1:8080")]
+    bind: String,
+
+    #[arg(long, env = "DATABASE_URL")]
+    database_url: String,
+}
 
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
-    let listener = TcpListener::bind(ADDRESS).await?;
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenvy::dotenv().ok();
+    let args = Args::parse();
+    let _database = Database::connect(&args.database_url).await?;
+    let listener = TcpListener::bind(&args.bind).await?;
     let (messages, _) = broadcast::channel::<ServerMessage>(100);
     let users = Arc::new(RwLock::new(HashMap::<String, String>::new()));
-    println!("{} server listening on {ADDRESS}", termlink::APP_NAME);
+    println!("{} server listening on {}", termlink::APP_NAME, args.bind);
 
     loop {
         let (stream, peer) = listener.accept().await?;
