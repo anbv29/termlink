@@ -1,12 +1,13 @@
 use clap::Parser;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use termlink::auth;
 use termlink::database::{Database, User};
 use termlink::protocol::{self, ClientMessage, ServerMessage};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{RwLock, broadcast, mpsc};
+use tokio::task::JoinSet;
 
 #[derive(Clone)]
 struct OnlineUser {
@@ -33,23 +34,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     database.migrate().await?;
     let listener = TcpListener::bind(&args.bind).await?;
     let (messages, _) = broadcast::channel::<ServerMessage>(100);
+    let (shutdown, _) = broadcast::channel::<()>(1);
     let users = Arc::new(RwLock::new(HashMap::<String, OnlineUser>::new()));
+    let mut tasks = JoinSet::new();
     println!("{} server listening on {}", termlink::APP_NAME, args.bind);
 
     loop {
-        let (stream, peer) = listener.accept().await?;
-        let messages = messages.clone();
-        let users = users.clone();
-        let database = database.clone();
-        println!("Client connected from {peer}");
+        tokio::select! {
+            accepted = listener.accept() => {
+                let (stream, peer) = accepted?;
+                let messages = messages.clone();
+                let users = users.clone();
+                let database = database.clone();
+                let shutdown = shutdown.subscribe();
+                let session_name = Arc::new(Mutex::new(None::<String>));
+                println!("Client connected from {peer}");
 
-        tokio::spawn(async move {
-            if let Err(error) = handle_client(stream, messages.clone(), users, database).await {
-                eprintln!("Connection error for {peer}: {error}");
+                tasks.spawn(async move {
+                    if let Err(error) = handle_client(
+                        stream,
+                        messages.clone(),
+                        users.clone(),
+                        database,
+                        shutdown,
+                        session_name.clone(),
+                    ).await {
+                        eprintln!("Connection error for {peer}: {error}");
+                    }
+
+                    let disconnected_name = session_name
+                        .lock()
+                        .ok()
+                        .and_then(|name| name.clone());
+                    if let Some(username) = disconnected_name {
+                        users.write().await.remove(&username.to_ascii_lowercase());
+                        let _ = messages.send(ServerMessage::Notice {
+                            message: format!("{username} left #general"),
+                        });
+                    }
+                    println!("Client disconnected: {peer}");
+                });
             }
-            println!("Client disconnected: {peer}");
-        });
+            signal = tokio::signal::ctrl_c() => {
+                signal?;
+                println!("Shutdown requested; closing client connections...");
+                break;
+            }
+        }
     }
+
+    let _ = shutdown.send(());
+    while let Some(result) = tasks.join_next().await {
+        if let Err(error) = result {
+            eprintln!("Client task ended unexpectedly: {error}");
+        }
+    }
+    database.close().await;
+    println!("TermLink server stopped cleanly");
+    Ok(())
 }
 
 async fn handle_client(
@@ -57,6 +99,8 @@ async fn handle_client(
     messages: broadcast::Sender<ServerMessage>,
     users: Arc<RwLock<HashMap<String, OnlineUser>>>,
     database: Database,
+    mut shutdown: broadcast::Receiver<()>,
+    session_name: Arc<Mutex<Option<String>>>,
 ) -> std::io::Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
@@ -66,6 +110,12 @@ async fn handle_client(
 
     loop {
         tokio::select! {
+            _ = shutdown.recv() => {
+                let _ = write_message(&mut writer, &ServerMessage::Notice {
+                    message: "Server is shutting down".to_owned(),
+                }).await;
+                break;
+            }
             incoming = lines.next_line() => {
                 match incoming? {
                     Some(line) if line.len() > protocol::MAX_WIRE_LINE_LENGTH => {
@@ -102,6 +152,9 @@ async fn handle_client(
                                             },
                                         );
                                         current_user = Some(user);
+                                        if let Ok(mut name) = session_name.lock() {
+                                            *name = Some(requested_name.clone());
+                                        }
                                         write_message(
                                             &mut writer,
                                             &ServerMessage::Authenticated {
@@ -166,6 +219,9 @@ async fn handle_client(
                                                 },
                                             );
                                             current_user = Some(user);
+                                            if let Ok(mut name) = session_name.lock() {
+                                                *name = Some(display_name.clone());
+                                            }
                                             write_message(
                                                 &mut writer,
                                                 &ServerMessage::Authenticated {
@@ -339,16 +395,6 @@ async fn handle_client(
                 }
             }
         }
-    }
-
-    if let Some(user) = current_user {
-        users
-            .write()
-            .await
-            .remove(&user.username.to_ascii_lowercase());
-        let _ = messages.send(ServerMessage::Notice {
-            message: format!("{} left #general", user.username),
-        });
     }
 
     Ok(())

@@ -34,6 +34,10 @@ impl Database {
         &self.pool
     }
 
+    pub async fn close(&self) {
+        self.pool.close().await;
+    }
+
     pub async fn migrate(&self) -> Result<(), sqlx::migrate::MigrateError> {
         sqlx::migrate!("./migrations").run(&self.pool).await
     }

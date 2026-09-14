@@ -40,6 +40,15 @@ async fn main() -> std::io::Result<()> {
 
     loop {
         tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                let json = protocol::encode(&ClientMessage::Quit)
+                    .map_err(std::io::Error::other)?;
+                writer.write_all(json.as_bytes()).await?;
+                writer.write_all(b"\n").await?;
+                writer.shutdown().await?;
+                println!("Disconnecting from TermLink...");
+                break;
+            }
             input = input_lines.next_line() => {
                 match input? {
                     Some(line) => {
