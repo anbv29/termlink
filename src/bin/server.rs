@@ -219,28 +219,46 @@ async fn handle_client(
                                         if password_matches {
                                             let user = credentials.user;
                                             let display_name = user.username.clone();
-                                            users.write().await.insert(
-                                                display_name.to_ascii_lowercase(),
-                                                OnlineUser {
-                                                    id: user.id,
-                                                    display_name: display_name.clone(),
-                                                    direct_sender: direct_sender.clone(),
-                                                },
-                                            );
-                                            current_user = Some(user);
-                                            if let Ok(mut name) = session_name.lock() {
-                                                *name = Some(display_name.clone());
+                                            let activated = {
+                                                let mut online = users.write().await;
+                                                let key = display_name.to_ascii_lowercase();
+                                                if let std::collections::hash_map::Entry::Vacant(
+                                                    entry,
+                                                ) = online.entry(key)
+                                                {
+                                                    entry.insert(
+                                                        OnlineUser {
+                                                            id: user.id,
+                                                            display_name: display_name.clone(),
+                                                            direct_sender: direct_sender.clone(),
+                                                        },
+                                                    );
+                                                    true
+                                                } else {
+                                                    false
+                                                }
+                                            };
+
+                                            if activated {
+                                                current_user = Some(user);
+                                                if let Ok(mut name) = session_name.lock() {
+                                                    *name = Some(display_name.clone());
+                                                }
+                                                write_message(
+                                                    &mut writer,
+                                                    &ServerMessage::Authenticated {
+                                                        username: display_name.clone(),
+                                                    },
+                                                )
+                                                .await?;
+                                                let _ = messages.send(ServerMessage::Notice {
+                                                    message: format!("{display_name} joined #general"),
+                                                });
+                                            } else {
+                                                write_message(&mut writer, &ServerMessage::Error {
+                                                    message: "That user is already online".to_owned(),
+                                                }).await?;
                                             }
-                                            write_message(
-                                                &mut writer,
-                                                &ServerMessage::Authenticated {
-                                                    username: display_name.clone(),
-                                                },
-                                            )
-                                            .await?;
-                                            let _ = messages.send(ServerMessage::Notice {
-                                                message: format!("{display_name} joined #general"),
-                                            });
                                         } else {
                                             write_message(&mut writer, &ServerMessage::Error {
                                                 message: "Invalid username or password".to_owned(),
@@ -283,7 +301,7 @@ async fn handle_client(
                                 }
                             } else {
                                 write_message(&mut writer, &ServerMessage::Error {
-                                    message: "Choose a username before chatting".to_owned(),
+                                    message: "Register or log in before chatting".to_owned(),
                                 }).await?;
                             }
                         }
@@ -393,7 +411,10 @@ async fn handle_client(
             }
             broadcast = inbox.recv() => {
                 match broadcast {
-                    Ok(message) => write_message(&mut writer, &message).await?,
+                    Ok(message) if current_user.is_some() => {
+                        write_message(&mut writer, &message).await?;
+                    }
+                    Ok(_) => {}
                     Err(broadcast::error::RecvError::Lagged(skipped)) => {
                         warn!(skipped, "slow client missed broadcast messages");
                     }

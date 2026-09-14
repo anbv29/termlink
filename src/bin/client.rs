@@ -38,6 +38,28 @@ async fn main() -> std::io::Result<()> {
     writer.write_all(join.as_bytes()).await?;
     writer.write_all(b"\n").await?;
 
+    let Some(authentication_response) = server_lines.next_line().await? else {
+        eprintln!("Server closed the connection during authentication");
+        return Ok(());
+    };
+    match protocol::decode::<ServerMessage>(&authentication_response) {
+        Ok(ServerMessage::Authenticated { username }) => {
+            println!("Authenticated as {username}");
+        }
+        Ok(ServerMessage::Error { message }) => {
+            eprintln!("Authentication failed: {message}");
+            return Ok(());
+        }
+        Ok(ServerMessage::Notice { message }) => {
+            eprintln!("Server notice during authentication: {message}");
+            return Ok(());
+        }
+        Ok(_) | Err(_) => {
+            eprintln!("Server returned an unexpected authentication response");
+            return Ok(());
+        }
+    }
+
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
